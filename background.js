@@ -1,73 +1,88 @@
 let refreshTimer = null;
 let countdownTimer = null;
 let timeLeft = 0;
+let isRunning = false;
+let refreshInterval = 300; // Default 5 minutes
+
+// Load state from storage on startup
+chrome.runtime.onStartup.addListener(() => {
+    chrome.storage.local.get(["refreshInterval", "isRunning"], (data) => {
+        if (data.isRunning && data.refreshInterval) {
+            startRefresh(data.refreshInterval);
+        }
+    });
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("[DEBUG] Received message:", message);
 
     if (message.action === "start_refresh") {
         let interval = message.interval;
-        timeLeft = interval;
-
-        // Save interval in storage for persistence
-        chrome.storage.local.set({ refreshInterval: interval });
-
-        // Refresh the active tab immediately
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs.length > 0) {
-                let tabId = tabs[0].id;
-                chrome.tabs.reload(tabId, () => {
-                    console.log("[DEBUG] Page refreshed immediately");
-
-                    // Start auto-refresh interval
-                    refreshTimer = setInterval(() => {
-                        chrome.tabs.reload(tabId);
-                        console.log("[DEBUG] Page auto-refreshed");
-                        timeLeft = interval; // Reset timer after each refresh
-                    }, interval * 1000);
-
-                    // Start countdown timer for badge
-                    startCountdown(interval);
-
-                    sendResponse({ status: "success", message: "Auto-refresh started" });
-                });
-            }
-        });
-
-        return true; // Keep message channel open for async response
+        startRefresh(interval);
+        sendResponse({ status: "success", message: "Auto-refresh started" });
+        return true;
     }
 
     if (message.action === "stop_refresh") {
         stopTimers();
         sendResponse({ status: "success", message: "Auto-refresh stopped" });
     }
+
+    if (message.action === "get_status") {
+        sendResponse({ isRunning: isRunning, timeLeft: timeLeft, refreshInterval: refreshInterval });
+    }
 });
 
-// Function to update the badge timer (MM:SS format)
-function updateBadgeText() {
-    let minutes = Math.floor(timeLeft / 60);
-    let seconds = timeLeft % 60;
-    let displayText = `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`; // Format MM:SS
-    chrome.action.setBadgeText({ text: displayText });
-    chrome.action.setBadgeBackgroundColor({ color: "#FF0000" }); // Red color for visibility
+function startRefresh(interval) {
+    stopTimers(); // Stop any existing timers
+    isRunning = true;
+    refreshInterval = interval;
+    timeLeft = interval;
+    chrome.storage.local.set({ refreshInterval: refreshInterval, isRunning: true });
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs.length > 0) {
+            let tabId = tabs[0].id;
+            chrome.tabs.reload(tabId, () => {
+                console.log("[DEBUG] Page refreshed immediately");
+
+                refreshTimer = setInterval(() => {
+                    chrome.tabs.reload(tabId);
+                    console.log("[DEBUG] Page auto-refreshed");
+                    timeLeft = refreshInterval; // Reset timer
+                }, refreshInterval * 1000);
+
+                startCountdown();
+            });
+        }
+    });
 }
 
-// Function to start countdown timer
-function startCountdown(interval) {
+function updateBadgeText() {
+    if (isRunning && timeLeft > 0) {
+        let minutes = Math.floor(timeLeft / 60);
+        let seconds = timeLeft % 60;
+        let displayText = `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
+        chrome.action.setBadgeText({ text: displayText });
+        chrome.action.setBadgeBackgroundColor({ color: "#007bff" });
+    } else {
+        chrome.action.setBadgeText({ text: "" });
+    }
+}
+
+function startCountdown() {
     if (countdownTimer) clearInterval(countdownTimer);
-    timeLeft = interval;
 
     countdownTimer = setInterval(() => {
         if (timeLeft > 0) {
             timeLeft--;
         } else {
-            timeLeft = interval; // Reset timer after each refresh
+            timeLeft = refreshInterval;
         }
         updateBadgeText();
     }, 1000);
 }
 
-// Function to stop all timers
 function stopTimers() {
     if (refreshTimer) {
         clearInterval(refreshTimer);
@@ -77,6 +92,9 @@ function stopTimers() {
         clearInterval(countdownTimer);
         countdownTimer = null;
     }
-    chrome.action.setBadgeText({ text: "" }); // Clear badge text
+    isRunning = false;
+    timeLeft = 0;
+    chrome.storage.local.set({ isRunning: false });
+    chrome.action.setBadgeText({ text: "" });
     console.log("[DEBUG] Auto-refresh stopped");
 }

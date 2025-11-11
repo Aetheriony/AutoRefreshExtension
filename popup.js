@@ -1,68 +1,68 @@
 document.addEventListener("DOMContentLoaded", function () {
-    let startBtn = document.getElementById("start");
-    let stopBtn = document.getElementById("stop");
-    let intervalSelect = document.getElementById("interval");
+    const startBtn = document.getElementById("start");
+    const stopBtn = document.getElementById("stop");
+    const intervalSelect = document.getElementById("interval");
+    const timerDisplay = document.getElementById("timerDisplay");
 
-    let timerDisplay = document.createElement("p"); // Add Timer Display
-    timerDisplay.id = "timerDisplay";
-    document.body.appendChild(timerDisplay); // Append below buttons
+    // Function to update the UI based on the background state
+    function updateUI(status) {
+        if (status.isRunning) {
+            const minutes = Math.floor(status.timeLeft / 60);
+            const seconds = status.timeLeft % 60;
+            timerDisplay.textContent = `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
+            timerDisplay.classList.remove("stopped");
+            intervalSelect.value = status.refreshInterval;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        } else {
+            timerDisplay.textContent = "Not running";
+            timerDisplay.classList.add("stopped");
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        }
+    }
 
-    console.log("[DEBUG] Popup loaded");
-
-    // Load saved interval from storage
-    chrome.storage.local.get("refreshInterval", (data) => {
-        console.log("[DEBUG] Retrieved refreshInterval from storage:", data);
-
-        if (data.refreshInterval) {
-            intervalSelect.value = data.refreshInterval; // Keep in seconds
-            updateTimerDisplay(data.refreshInterval);
+    // Get the current status from the background script when the popup is opened
+    chrome.runtime.sendMessage({ action: "get_status" }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.error("Error getting status:", chrome.runtime.lastError);
+        } else {
+            updateUI(response);
         }
     });
 
-    // Function to update timer in MM:SS format
-    function updateTimerDisplay(seconds) {
-        let minutes = Math.floor(seconds / 60);
-        let remainingSeconds = seconds % 60;
-        timerDisplay.textContent = `${minutes}m ${remainingSeconds}s`;
-    }
-
     // Start auto-refresh
     startBtn.addEventListener("click", () => {
-        let interval = parseInt(intervalSelect.value); // Dropdown already in seconds
-
-        console.log("[DEBUG] Start button clicked, Interval selected:", interval, "seconds");
-
-        // Save interval in storage
-        chrome.storage.local.set({ refreshInterval: interval }, () => {
-            if (chrome.runtime.lastError) {
-                console.error("[ERROR] Failed to save refreshInterval:", chrome.runtime.lastError);
-            } else {
-                console.log("[DEBUG] Interval saved successfully");
-                updateTimerDisplay(interval); // Update UI immediately
-            }
-        });
-
-        // Send message to background script
+        const interval = parseInt(intervalSelect.value);
         chrome.runtime.sendMessage({ action: "start_refresh", interval: interval }, (response) => {
             if (chrome.runtime.lastError) {
-                console.error("[ERROR] Failed to send start_refresh message:", chrome.runtime.lastError);
+                console.error("Error starting refresh:", chrome.runtime.lastError);
             } else {
-                console.log("[DEBUG] Message sent to background:", response);
+                updateUI({ isRunning: true, timeLeft: interval, refreshInterval: interval });
             }
         });
     });
 
     // Stop auto-refresh
     stopBtn.addEventListener("click", () => {
-        console.log("[DEBUG] Stop button clicked");
-
-        chrome.runtime.sendMessage({ action: "stop_refresh" }, (response) => {
+        chrome.runtime.sendMessage({ action: "stop_refresh" }, () => {
             if (chrome.runtime.lastError) {
-                console.error("[ERROR] Failed to send stop_refresh message:", chrome.runtime.lastError);
-            } else {
-                console.log("[DEBUG] Stop message sent to background:", response);
-                timerDisplay.textContent = "Stopped"; // Reset display when stopped
+                console.error("Error stopping refresh:", chrome.runtime.lastError);
             }
+            updateUI({ isRunning: false });
         });
     });
+
+    // Periodically update the timer display
+    setInterval(() => {
+        chrome.runtime.sendMessage({ action: "get_status" }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error("Error getting status:", chrome.runtime.lastError);
+                // Assume it's stopped if the background script is unreachable
+                updateUI({ isRunning: false });
+            } else if (response) {
+                updateUI(response);
+            }
+        });
+    }, 1000);
 });
