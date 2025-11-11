@@ -7,16 +7,41 @@ document.addEventListener("DOMContentLoaded", function () {
     const customMinutesInput = document.getElementById("custom-minutes");
     const customSecondsInput = document.getElementById("custom-seconds");
 
-    // Show/hide custom interval inputs
-    intervalSelect.addEventListener("change", () => {
-        if (intervalSelect.value === "custom") {
-            customIntervalGroup.style.display = "block";
-        } else {
-            customIntervalGroup.style.display = "none";
-        }
+    let currentTabId = null;
+
+    // Get the current tab to apply the timer to.
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs.length === 0) return; // Should not happen
+        currentTabId = tabs[0].id;
+
+        // Get the initial status for the current tab.
+        chrome.runtime.sendMessage({ action: "get_status", tabId: currentTabId }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error("Error getting status:", chrome.runtime.lastError);
+            } else if (response) {
+                updateUI(response);
+            }
+        });
+
+        // Set up a periodic update for the UI.
+        setInterval(() => {
+            chrome.runtime.sendMessage({ action: "get_status", tabId: currentTabId }, (response) => {
+                if (chrome.runtime.lastError) {
+                    // Background script might be inactive; assume stopped.
+                    updateUI({ isRunning: false });
+                } else if (response) {
+                    updateUI(response);
+                }
+            });
+        }, 1000);
     });
 
-    // Function to update the UI based on the background state
+    // Show/hide custom interval inputs based on dropdown selection.
+    intervalSelect.addEventListener("change", () => {
+        customIntervalGroup.style.display = (intervalSelect.value === "custom") ? "flex" : "none";
+    });
+
+    // --- UI Update Logic ---
     function updateUI(status) {
         if (status.isRunning) {
             const minutes = Math.floor(status.timeLeft / 60);
@@ -26,16 +51,15 @@ document.addEventListener("DOMContentLoaded", function () {
             startBtn.disabled = true;
             stopBtn.disabled = false;
 
-            // Set the dropdown or custom fields based on the running interval
             const predefined = ["300", "600", "1200", "1800"];
-            if (predefined.includes(status.refreshInterval.toString())) {
-                intervalSelect.value = status.refreshInterval;
+            if (predefined.includes(status.interval.toString())) {
+                intervalSelect.value = status.interval;
                 customIntervalGroup.style.display = "none";
             } else {
                 intervalSelect.value = "custom";
-                customIntervalGroup.style.display = "block";
-                customMinutesInput.value = Math.floor(status.refreshInterval / 60);
-                customSecondsInput.value = status.refreshInterval % 60;
+                customIntervalGroup.style.display = "flex";
+                customMinutesInput.value = Math.floor(status.interval / 60);
+                customSecondsInput.value = status.interval % 60;
             }
         } else {
             timerDisplay.textContent = "Not running";
@@ -45,24 +69,15 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     }
 
-    // Get the current status from the background script when the popup is opened
-    chrome.runtime.sendMessage({ action: "get_status" }, (response) => {
-        if (chrome.runtime.lastError) {
-            console.error("Error getting status:", chrome.runtime.lastError);
-        } else if (response) {
-            updateUI(response);
-        }
-    });
-
-    // Start auto-refresh
+    // --- Event Listeners for Buttons ---
     startBtn.addEventListener("click", () => {
-        let interval = 0;
+        if (!currentTabId) return;
+        let interval;
         if (intervalSelect.value === "custom") {
             const minutes = parseInt(customMinutesInput.value, 10) || 0;
             const seconds = parseInt(customSecondsInput.value, 10) || 0;
             interval = (minutes * 60) + seconds;
-            
-            if (interval < 1) { // Minimum 1 second interval
+            if (interval < 1) {
                 alert("The minimum refresh interval is 1 second.");
                 return;
             }
@@ -70,34 +85,19 @@ document.addEventListener("DOMContentLoaded", function () {
             interval = parseInt(intervalSelect.value, 10);
         }
 
-        chrome.runtime.sendMessage({ action: "start_refresh", interval: interval }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.error("Error starting refresh:", chrome.runtime.lastError);
-            } else {
-                updateUI({ isRunning: true, timeLeft: interval, refreshInterval: interval });
+        chrome.runtime.sendMessage({ action: "start_refresh", tabId: currentTabId, interval: interval }, () => {
+            if (!chrome.runtime.lastError) {
+                updateUI({ isRunning: true, timeLeft: interval, interval: interval });
             }
         });
     });
 
-    // Stop auto-refresh
     stopBtn.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ action: "stop_refresh" }, () => {
-            if (chrome.runtime.lastError) {
-                console.error("Error stopping refresh:", chrome.runtime.lastError);
+        if (!currentTabI) return;
+        chrome.runtime.sendMessage({ action: "stop_refresh", tabId: currentTabId }, () => {
+            if (!chrome.runtime.lastError) {
+                updateUI({ isRunning: false });
             }
-            updateUI({ isRunning: false });
         });
     });
-
-    // Periodically update the timer display
-    setInterval(() => {
-        chrome.runtime.sendMessage({ action: "get_status" }, (response) => {
-            if (chrome.runtime.lastError) {
-                // Assume it's stopped if the background script is unreachable
-                updateUI({ isRunning: false });
-            } else if (response) {
-                updateUI(response);
-            }
-        });
-    }, 1000);
 });
